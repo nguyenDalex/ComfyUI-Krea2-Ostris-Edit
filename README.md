@@ -37,7 +37,7 @@ the images cannot be encoded.
 
 ### Krea 2 Ostris Edit Model Patch
 
-Input: `model`. Output: `model`.
+Inputs: `model`, `kv_cache` (default off). Output: `model`.
 
 Patches the Krea 2 model so it consumes the reference latents from the
 conditioning. Each reference is appended to the image token sequence and
@@ -47,6 +47,12 @@ required because the stock Krea 2 model in ComfyUI ignores reference latents.
 
 If the conditioning has no reference latents, the patched model behaves
 exactly like the stock model, so it is safe to leave in the graph.
+
+`kv_cache` caches the reference tokens' attention K/V: they are precomputed in
+a single t=0 pass and reused on every denoising step, so the references never
+ride along in the per-step sequence (faster, especially at many steps). **The
+LoRA must be trained with ai-toolkit's `kv_cache` model kwarg for this to work
+properly** — leave it off for normally trained edit LoRAs.
 
 ## Example wiring
 
