@@ -11,3 +11,4 @@ Repository = "https://github.com/ostris/ComfyUI-Krea2-Ostris-Edit"
 [tool.comfy]
 PublisherId = "ostris"
 DisplayName = "Krea 2 Ostris Edit"
+Icon = https://ostris.com/wp-content/uploads/2026/07/004.jpg
