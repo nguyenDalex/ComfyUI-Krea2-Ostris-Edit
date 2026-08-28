@@ -124,7 +124,15 @@ class TextEncodeKrea2OstrisEdit:
 # ---------------------------------------------------------------------------
 
 
-def _pack_refs(dit, ref_latents, bs, device, dtype):
+def _pack_refs(
+    dit,
+    ref_latents,
+    bs,
+    device,
+    dtype,
+    target_hw=None,
+    scale_ref_positions=False,
+):
     """Patchify reference latents into tokens + RoPE positions: each reference
     gets axis-0 index i+1 with its own y/x grid from 0. Returns
     ``(reftok (B, Lr, C*p*p), refpos (B, Lr, 3))``."""
@@ -145,8 +153,34 @@ def _pack_refs(dit, ref_latents, bs, device, dtype):
         )
         rid = torch.zeros(rh, rw, 3, device=device, dtype=torch.float32)
         rid[..., 0] = i + 1.0
-        rid[..., 1] = torch.arange(rh, device=device, dtype=torch.float32)[:, None]
-        rid[..., 2] = torch.arange(rw, device=device, dtype=torch.float32)[None, :]
+        if scale_ref_positions and target_hw is not None:
+            # Experimental high-resolution alignment:
+            # keep the 1MP reference token count, but map its normalized
+            # spatial coordinates across the full target latent grid.
+            #
+            # Without this, a 64x64 reference grid paired with a 128x128 target
+            # still occupies y/x coordinates 0..63, which spatially corresponds
+            # to the target's top-left quadrant.
+            target_h, target_w = target_hw
+            y = torch.linspace(
+                0.0,
+                float(max(target_h - 1, 0)),
+                steps=rh,
+                device=device,
+                dtype=torch.float32,
+            )
+            x = torch.linspace(
+                0.0,
+                float(max(target_w - 1, 0)),
+                steps=rw,
+                device=device,
+                dtype=torch.float32,
+            )
+            rid[..., 1] = y[:, None]
+            rid[..., 2] = x[None, :]
+        else:
+            rid[..., 1] = torch.arange(rh, device=device, dtype=torch.float32)[:, None]
+            rid[..., 2] = torch.arange(rw, device=device, dtype=torch.float32)[None, :]
         ref_pos.append(rid.reshape(1, rh * rw, 3).repeat(bs, 1, 1))
     return torch.cat(ref_tokens, dim=1), torch.cat(ref_pos, dim=1)
 
@@ -224,7 +258,15 @@ def _block_ref_forward(block, x, vec, refvec, split, freqs, transformer_options)
     return x
 
 
-def _forward_with_refs(self, x, timesteps, context, ref_latents, transformer_options):
+def _forward_with_refs(
+    self,
+    x,
+    timesteps,
+    context,
+    ref_latents,
+    transformer_options,
+    scale_ref_positions=False,
+):
     """Krea 2 SingleStreamDiT forward with reference latents appended at t=0
     ("index_timestep_zero"). Mirrors comfy.ldm.krea2.model.SingleStreamDiT._forward
     (including the 5D Wan21-latent handling) with the ref packing / modulation
@@ -244,8 +286,17 @@ def _forward_with_refs(self, x, timesteps, context, ref_latents, transformer_opt
 
     img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch, pw=patch)
 
-    # Pack each reference: RoPE axis-0 index i+1, own y/x grid from 0.
-    reftok, refpos = _pack_refs(self, ref_latents, bs, device, x.dtype)
+    # Pack each reference. With scale_ref_positions enabled, its y/x RoPE
+    # coordinates are normalized to the full target grid.
+    reftok, refpos = _pack_refs(
+        self,
+        ref_latents,
+        bs,
+        device,
+        x.dtype,
+        target_hw=(h_, w_),
+        scale_ref_positions=scale_ref_positions,
+    )
     reflen = reftok.shape[1]
 
     img = self.first(torch.cat((img, reftok), dim=1))
@@ -304,7 +355,14 @@ def _forward_with_refs(self, x, timesteps, context, ref_latents, transformer_opt
 # ---------------------------------------------------------------------------
 
 
-def _precompute_ref_kv(dit, x, timesteps, ref_latents, transformer_options):
+def _precompute_ref_kv(
+    dit,
+    x,
+    timesteps,
+    ref_latents,
+    transformer_options,
+    scale_ref_positions=False,
+):
     """Run only the clean reference tokens through the blocks at t=0 and record
     each block's post-RoPE K/V.
 
@@ -313,7 +371,17 @@ def _precompute_ref_kv(dit, x, timesteps, ref_latents, transformer_options):
     contribute inside a joint pass -- and they are timestep-invariant, so one
     pass serves the whole denoise."""
     bs = x.shape[0] * (x.shape[2] if x.ndim == 5 else 1)
-    reftok, refpos = _pack_refs(dit, ref_latents, bs, x.device, x.dtype)
+    target_h = math.ceil(x.shape[-2] / dit.patch)
+    target_w = math.ceil(x.shape[-1] / dit.patch)
+    reftok, refpos = _pack_refs(
+        dit,
+        ref_latents,
+        bs,
+        x.device,
+        x.dtype,
+        target_hw=(target_h, target_w),
+        scale_ref_positions=scale_ref_positions,
+    )
     h = dit.first(reftok)
     t0 = dit.tmlp(
         timestep_embedding(torch.zeros_like(timesteps), dit.tdim)
@@ -431,6 +499,19 @@ class Krea2OstrisEditModelPatch:
                         ),
                     },
                 ),
+                "scale_ref_positions": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "EXPERIMENTAL: remap each reference's RoPE y/x "
+                            "coordinates across the full target latent grid. "
+                            "Useful when the reference is capped near 1MP but "
+                            "the target latent is much larger; intended to "
+                            "prevent top-left anchoring / reduced-scale copies."
+                        ),
+                    },
+                ),
             }
         }
 
@@ -445,7 +526,7 @@ class Krea2OstrisEditModelPatch:
         "be trained with ai-toolkit's kv_cache option for it to work properly."
     )
 
-    def patch(self, model, kv_cache=False):
+    def patch(self, model, kv_cache=False, scale_ref_positions=False):
         m = model.clone()
         base_model = m.model
         dit = m.get_model_object("diffusion_model")
@@ -500,7 +581,13 @@ class Krea2OstrisEditModelPatch:
                 )
             if not kv_cache:
                 return _forward_with_refs(
-                    dit, x, timesteps, context, ref_latents, transformer_options
+                    dit,
+                    x,
+                    timesteps,
+                    context,
+                    ref_latents,
+                    transformer_options,
+                    scale_ref_positions=scale_ref_positions,
                 )
 
             # New-run detection: sigmas only decrease within a run, and the
@@ -523,7 +610,12 @@ class Krea2OstrisEditModelPatch:
             ref_kv = state["caches"].get(key)
             if ref_kv is None:
                 ref_kv = _precompute_ref_kv(
-                    dit, x, timesteps, ref_latents, transformer_options
+                    dit,
+                    x,
+                    timesteps,
+                    ref_latents,
+                    transformer_options,
+                    scale_ref_positions=scale_ref_positions,
                 )
                 state["caches"][key] = ref_kv
             return _forward_with_cached_refs(
