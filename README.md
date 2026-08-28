@@ -37,7 +37,7 @@ the images cannot be encoded.
 
 ### Krea 2 Ostris Edit Model Patch
 
-Inputs: `model`, `kv_cache` (default off). Output: `model`.
+Inputs: `model`, `kv_cache` (default off), `scale_ref_positions` (default off, experimental). Output: `model`.
 
 Patches the Krea 2 model so it consumes the reference latents from the
 conditioning. Each reference is appended to the image token sequence and
@@ -53,6 +53,10 @@ a single t=0 pass and reused on every denoising step, so the references never
 ride along in the per-step sequence (faster, especially at many steps). **The
 LoRA must be trained with ai-toolkit's `kv_cache` model kwarg for this to work
 properly** — leave it off for normally trained edit LoRAs.
+
+`scale_ref_positions` remaps each reference's RoPE y/x coordinates across the
+full target latent grid. It is intended for high-resolution targets where
+reference latents are capped near 1MP, to reduce top-left anchoring / reduced-scale copies.
 
 ## Example wiring
 
