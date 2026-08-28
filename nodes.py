@@ -6,9 +6,8 @@ Adds Kontext-style multi-reference support to Krea 2 without touching core:
     Krea 2 Qwen3-VL text encoder (edit-plus style ``Picture N:`` vision
     placeholders inside Krea's own conditioning template) and attaches the
     VAE reference latents to the conditioning.
-  - ``Krea2OstrisEditReferenceMode`` enables reference-latent conditioning on the
-    Krea 2 model (via ModelPatcher object hooks, applied/removed per-workflow) so
-    those reference latents are
+  - ``Krea2OstrisEditModelPatch`` patches the Krea 2 model (via ModelPatcher object
+    patches, applied/removed per-workflow) so those reference latents are
     appended to the image token sequence with RoPE axis-0 index 1, 2, 3... and
     conditioned at t=0 -- the ComfyUI Flux/QwenImage "index_timestep_zero"
     reference method.
@@ -17,7 +16,7 @@ Both mirror the ai-toolkit ``krea2`` training implementation exactly:
 VL images are downscaled (never upscaled) to fit 384x384 total pixels,
 reference latents to fit 1MP, snapped to /16 so the latent grid patchifies.
 
-``Krea2OstrisEditReferenceMode``'s ``kv_cache`` toggle (default off) is for LoRAs
+``Krea2OstrisEditModelPatch``'s ``kv_cache`` toggle (default off) is for LoRAs
 trained with ai-toolkit's ``kv_cache`` model kwarg, where reference tokens
 attend only to each other. Their per-block K/V are then timestep-invariant, so
 they are precomputed in a single ref-only pass at t=0 and injected as extra
