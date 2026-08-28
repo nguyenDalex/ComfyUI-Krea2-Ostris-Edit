@@ -501,9 +501,11 @@ def _build_reference_mode_model(model, kv_cache=False, scale_ref_positions=False
         out = orig_extra_conds_shapes(**kwargs)
         ref_latents = kwargs.get("reference_latents", None)
         if ref_latents is not None:
-            out["ref_latents"] = list(
-                [1, 16, sum(map(lambda a: math.prod(a.size()), ref_latents)) // 16]
-            )
+            out["ref_latents"] = [
+                1,
+                16,
+                sum(map(lambda a: math.prod(a.size()), ref_latents)) // 16,
+            ]
         return out
 
     # Ref K/V cache for the kv_cache toggle: filled by a single ref-only
