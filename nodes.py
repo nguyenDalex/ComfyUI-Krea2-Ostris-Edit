@@ -8,7 +8,7 @@ Adds Kontext-style multi-reference support to Krea 2 without touching core:
     VAE reference latents to the conditioning.
   - ``Krea2OstrisEditReferenceMode`` enables reference-latent conditioning on the
     Krea 2 model (via ModelPatcher object hooks, applied/removed per-workflow) so
-    those reference latents are
+    that those reference latents are
     appended to the image token sequence with RoPE axis-0 index 1, 2, 3... and
     conditioned at t=0 -- the ComfyUI Flux/QwenImage "index_timestep_zero"
     reference method.
