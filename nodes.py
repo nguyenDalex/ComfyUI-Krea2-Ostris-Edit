@@ -6,8 +6,9 @@ Adds Kontext-style multi-reference support to Krea 2 without touching core:
     Krea 2 Qwen3-VL text encoder (edit-plus style ``Picture N:`` vision
     placeholders inside Krea's own conditioning template) and attaches the
     VAE reference latents to the conditioning.
-  - ``Krea2OstrisEditModelPatch`` patches the Krea 2 model (via ModelPatcher object
-    patches, applied/removed per-workflow) so those reference latents are
+  - ``Krea2OstrisEditReferenceMode`` enables reference-latent conditioning on the
+    Krea 2 model (via ModelPatcher object hooks, applied/removed per-workflow) so
+    that those reference latents are
     appended to the image token sequence with RoPE axis-0 index 1, 2, 3... and
     conditioned at t=0 -- the ComfyUI Flux/QwenImage "index_timestep_zero"
     reference method.
@@ -16,7 +17,7 @@ Both mirror the ai-toolkit ``krea2`` training implementation exactly:
 VL images are downscaled (never upscaled) to fit 384x384 total pixels,
 reference latents to fit 1MP, snapped to /16 so the latent grid patchifies.
 
-``Krea2OstrisEditModelPatch``'s ``kv_cache`` toggle (default off) is for LoRAs
+``Krea2OstrisEditReferenceMode``'s ``kv_cache`` toggle (default off) is for LoRAs
 trained with ai-toolkit's ``kv_cache`` model kwarg, where reference tokens
 attend only to each other. Their per-block K/V are then timestep-invariant, so
 they are precomputed in a single ref-only pass at t=0 and injected as extra
@@ -84,7 +85,7 @@ class TextEncodeKrea2OstrisEdit:
         "Encode a prompt with optional reference images for a Krea 2 edit "
         "LoRA. Images are fed to the Qwen3-VL text encoder (needs a text "
         "encoder checkpoint that includes the vision weights) and, when a VAE "
-        "is connected, attached as reference latents for Krea2OstrisEditModelPatch."
+        "is connected, attached as reference latents for Krea2OstrisEditReferenceMode."
     )
 
     def encode(self, clip, prompt, vae=None, image1=None, image2=None, image3=None):
@@ -478,12 +479,124 @@ def _ref_fingerprint(ref_latents, bs):
     return tuple(key)
 
 
-class Krea2OstrisEditModelPatch:
+def _build_reference_mode_model(model, kv_cache=False, scale_ref_positions=False):
+    m = model.clone()
+    base_model = m.model
+    dit = m.get_model_object("diffusion_model")
+
+    orig_extra_conds = base_model.extra_conds
+    orig_extra_conds_shapes = base_model.extra_conds_shapes
+    orig_forward = dit.forward
+
+    def extra_conds(**kwargs):
+        out = orig_extra_conds(**kwargs)
+        ref_latents = kwargs.get("reference_latents", None)
+        if ref_latents is not None:
+            out["ref_latents"] = comfy.conds.CONDList(
+                [base_model.process_latent_in(lat) for lat in ref_latents]
+            )
+        return out
+
+    def extra_conds_shapes(**kwargs):
+        out = orig_extra_conds_shapes(**kwargs)
+        ref_latents = kwargs.get("reference_latents", None)
+        if ref_latents is not None:
+            out["ref_latents"] = [
+                1,
+                16,
+                sum(map(lambda a: math.prod(a.size()), ref_latents)) // 16,
+            ]
+        return out
+
+    # Ref K/V cache for the kv_cache toggle: filled by a single ref-only
+    # pass per run (t=0, refs attend only to each other, matching training)
+    # and reused by every denoising call. Cleared at the start of each
+    # sampling run so LoRA/weight changes between runs never serve stale
+    # K/V; keyed on ref content + batch size so cond/uncond with different
+    # refs coexist.
+    state = {"last_sigma": None, "caches": {}}
+
+    def forward(
+        x,
+        timesteps,
+        context,
+        attention_mask=None,
+        transformer_options={},
+        ref_latents=None,
+        **kwargs,
+    ):
+        if ref_latents is None or len(ref_latents) == 0:
+            return orig_forward(
+                x,
+                timesteps,
+                context,
+                attention_mask=attention_mask,
+                transformer_options=transformer_options,
+                **kwargs,
+            )
+        if not kv_cache:
+            return _forward_with_refs(
+                dit,
+                x,
+                timesteps,
+                context,
+                ref_latents,
+                transformer_options,
+                scale_ref_positions=scale_ref_positions,
+            )
+
+        # New-run detection: sigmas only decrease within a run, and the
+        # first call of a run sits at sample_sigmas[0] when available.
+        sig = float(timesteps.max())
+        sample_sigmas = transformer_options.get("sample_sigmas", None)
+        new_run = state["last_sigma"] is None or sig > state["last_sigma"]
+        if (
+            sample_sigmas is not None
+            and sig == float(sample_sigmas[0])
+            and sig != state["last_sigma"]
+        ):
+            new_run = True
+        if new_run:
+            state["caches"].clear()
+        state["last_sigma"] = sig
+
+        bs = x.shape[0] * (x.shape[2] if x.ndim == 5 else 1)
+        key = _ref_fingerprint(ref_latents, bs)
+        ref_kv = state["caches"].get(key)
+        if ref_kv is None:
+            ref_kv = _precompute_ref_kv(
+                dit,
+                x,
+                timesteps,
+                ref_latents,
+                transformer_options,
+                scale_ref_positions=scale_ref_positions,
+            )
+            state["caches"][key] = ref_kv
+        return _forward_with_cached_refs(dit, x, timesteps, context, ref_kv, transformer_options)
+
+    m.add_object_patch("extra_conds", extra_conds)
+    m.add_object_patch("extra_conds_shapes", extra_conds_shapes)
+    m.add_object_patch("diffusion_model.forward", forward)
+    return (m,)
+
+
+class Krea2OstrisEditReferenceMode:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "model": ("MODEL",),
+                "enable_reference_mode": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Opt-in toggle. When false, this node is a no-op and "
+                            "returns the input model unchanged."
+                        ),
+                    },
+                ),
                 "kv_cache": (
                     "BOOLEAN",
                     {
@@ -516,124 +629,31 @@ class Krea2OstrisEditModelPatch:
         }
 
     RETURN_TYPES = ("MODEL",)
-    FUNCTION = "patch"
+    FUNCTION = "apply"
     CATEGORY = "ostris/krea2"
     DESCRIPTION = (
-        "Enable reference latents on a Krea 2 model (index_timestep_zero "
-        "method, as trained by ai-toolkit). Chain conditioning from "
-        "TextEncodeKrea2OstrisEdit or Set Reference Latent nodes. "
-        "kv_cache enables the cached one-pass reference mode; the LoRA must "
-        "be trained with ai-toolkit's kv_cache option for it to work properly."
+        "Opt-in reference-latent conditioning for Krea 2 models. Chain "
+        "conditioning from TextEncodeKrea2OstrisEdit or Set Reference Latent "
+        "nodes. kv_cache enables the cached one-pass reference mode; the LoRA "
+        "must be trained with ai-toolkit's kv_cache option for it to work properly."
     )
 
-    def patch(self, model, kv_cache=False, scale_ref_positions=False):
-        m = model.clone()
-        base_model = m.model
-        dit = m.get_model_object("diffusion_model")
-
-        orig_extra_conds = base_model.extra_conds
-        orig_extra_conds_shapes = base_model.extra_conds_shapes
-        orig_forward = dit.forward
-
-        def extra_conds(**kwargs):
-            out = orig_extra_conds(**kwargs)
-            ref_latents = kwargs.get("reference_latents", None)
-            if ref_latents is not None:
-                out["ref_latents"] = comfy.conds.CONDList(
-                    [base_model.process_latent_in(lat) for lat in ref_latents]
-                )
-            return out
-
-        def extra_conds_shapes(**kwargs):
-            out = orig_extra_conds_shapes(**kwargs)
-            ref_latents = kwargs.get("reference_latents", None)
-            if ref_latents is not None:
-                out["ref_latents"] = list(
-                    [1, 16, sum(map(lambda a: math.prod(a.size()), ref_latents)) // 16]
-                )
-            return out
-
-        # Ref K/V cache for the kv_cache toggle: filled by a single ref-only
-        # pass per run (t=0, refs attend only to each other, matching training)
-        # and reused by every denoising call. Cleared at the start of each
-        # sampling run so LoRA/weight changes between runs never serve stale
-        # K/V; keyed on ref content + batch size so cond/uncond with different
-        # refs coexist.
-        state = {"last_sigma": None, "caches": {}}
-
-        def forward(
-            x,
-            timesteps,
-            context,
-            attention_mask=None,
-            transformer_options={},
-            ref_latents=None,
-            **kwargs,
-        ):
-            if ref_latents is None or len(ref_latents) == 0:
-                return orig_forward(
-                    x,
-                    timesteps,
-                    context,
-                    attention_mask=attention_mask,
-                    transformer_options=transformer_options,
-                    **kwargs,
-                )
-            if not kv_cache:
-                return _forward_with_refs(
-                    dit,
-                    x,
-                    timesteps,
-                    context,
-                    ref_latents,
-                    transformer_options,
-                    scale_ref_positions=scale_ref_positions,
-                )
-
-            # New-run detection: sigmas only decrease within a run, and the
-            # first call of a run sits at sample_sigmas[0] when available.
-            sig = float(timesteps.max())
-            sample_sigmas = transformer_options.get("sample_sigmas", None)
-            new_run = state["last_sigma"] is None or sig > state["last_sigma"]
-            if (
-                sample_sigmas is not None
-                and sig == float(sample_sigmas[0])
-                and sig != state["last_sigma"]
-            ):
-                new_run = True
-            if new_run:
-                state["caches"].clear()
-            state["last_sigma"] = sig
-
-            bs = x.shape[0] * (x.shape[2] if x.ndim == 5 else 1)
-            key = _ref_fingerprint(ref_latents, bs)
-            ref_kv = state["caches"].get(key)
-            if ref_kv is None:
-                ref_kv = _precompute_ref_kv(
-                    dit,
-                    x,
-                    timesteps,
-                    ref_latents,
-                    transformer_options,
-                    scale_ref_positions=scale_ref_positions,
-                )
-                state["caches"][key] = ref_kv
-            return _forward_with_cached_refs(
-                dit, x, timesteps, context, ref_kv, transformer_options
-            )
-
-        m.add_object_patch("extra_conds", extra_conds)
-        m.add_object_patch("extra_conds_shapes", extra_conds_shapes)
-        m.add_object_patch("diffusion_model.forward", forward)
-        return (m,)
+    def apply(
+        self, model, enable_reference_mode=False, kv_cache=False, scale_ref_positions=False
+    ):
+        if not enable_reference_mode:
+            return (model,)
+        return _build_reference_mode_model(
+            model, kv_cache=kv_cache, scale_ref_positions=scale_ref_positions
+        )
 
 
 NODE_CLASS_MAPPINGS = {
     "TextEncodeKrea2OstrisEdit": TextEncodeKrea2OstrisEdit,
-    "Krea2OstrisEditModelPatch": Krea2OstrisEditModelPatch,
+    "Krea2OstrisEditReferenceMode": Krea2OstrisEditReferenceMode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TextEncodeKrea2OstrisEdit": "Text Encode Krea 2 Ostris Edit",
-    "Krea2OstrisEditModelPatch": "Krea 2 Ostris Edit Model Patch",
+    "Krea2OstrisEditReferenceMode": "Krea 2 Ostris Edit Reference Mode",
 }
