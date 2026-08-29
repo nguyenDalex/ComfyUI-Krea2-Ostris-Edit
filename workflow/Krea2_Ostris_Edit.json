@@ -573,7 +573,7 @@
     },
     {
       "id": 33,
-      "type": "Krea2OstrisEditModelPatch",
+      "type": "Krea2OstrisEditReferenceMode",
       "pos": [
         -290.4746312620615,
         576.2664424161082
@@ -602,14 +602,18 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "Krea2OstrisEditModelPatch",
+        "Node name for S&R": "Krea2OstrisEditReferenceMode",
         "ue_properties": {
           "widget_ue_connectable": {},
           "input_ue_unconnectable": {},
           "version": "7.5.2"
         }
       },
-      "widgets_values": [],
+      "widgets_values": [
+        true,
+        false,
+        false
+      ],
       "color": "#223",
       "bgcolor": "#335"
     },

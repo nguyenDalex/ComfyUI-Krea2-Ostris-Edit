@@ -57,9 +57,6 @@ properly** — leave it off for normally trained edit LoRAs.
 full target latent grid. It is intended for high-resolution targets where
 reference latents are capped near 1MP, to reduce top-left anchoring / reduced-scale copies.
 
-The legacy node (`Krea 2 Ostris Edit Model Patch`) is still included for
-backward compatibility with existing workflows.
-
 ## Example wiring
 
 ```

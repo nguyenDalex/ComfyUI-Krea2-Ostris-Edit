@@ -6,8 +6,9 @@ Adds Kontext-style multi-reference support to Krea 2 without touching core:
     Krea 2 Qwen3-VL text encoder (edit-plus style ``Picture N:`` vision
     placeholders inside Krea's own conditioning template) and attaches the
     VAE reference latents to the conditioning.
-  - ``Krea2OstrisEditModelPatch`` patches the Krea 2 model (via ModelPatcher object
-    patches, applied/removed per-workflow) so those reference latents are
+  - ``Krea2OstrisEditReferenceMode`` enables reference-latent conditioning on the
+    Krea 2 model (via ModelPatcher object hooks, applied/removed per-workflow) so
+    those reference latents are
     appended to the image token sequence with RoPE axis-0 index 1, 2, 3... and
     conditioned at t=0 -- the ComfyUI Flux/QwenImage "index_timestep_zero"
     reference method.
@@ -16,7 +17,7 @@ Both mirror the ai-toolkit ``krea2`` training implementation exactly:
 VL images are downscaled (never upscaled) to fit 384x384 total pixels,
 reference latents to fit 1MP, snapped to /16 so the latent grid patchifies.
 
-``Krea2OstrisEditModelPatch``'s ``kv_cache`` toggle (default off) is for LoRAs
+``Krea2OstrisEditReferenceMode``'s ``kv_cache`` toggle (default off) is for LoRAs
 trained with ai-toolkit's ``kv_cache`` model kwarg, where reference tokens
 attend only to each other. Their per-block K/V are then timestep-invariant, so
 they are precomputed in a single ref-only pass at t=0 and injected as extra
@@ -84,7 +85,7 @@ class TextEncodeKrea2OstrisEdit:
         "Encode a prompt with optional reference images for a Krea 2 edit "
         "LoRA. Images are fed to the Qwen3-VL text encoder (needs a text "
         "encoder checkpoint that includes the vision weights) and, when a VAE "
-        "is connected, attached as reference latents for Krea2OstrisEditModelPatch."
+        "is connected, attached as reference latents for Krea2OstrisEditReferenceMode."
     )
 
     def encode(self, clip, prompt, vae=None, image1=None, image2=None, image3=None):
@@ -647,65 +648,12 @@ class Krea2OstrisEditReferenceMode:
         )
 
 
-class Krea2OstrisEditModelPatch:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "kv_cache": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "tooltip": (
-                            "Cache the reference tokens' attention K/V: they "
-                            "are precomputed in one t=0 pass and reused every "
-                            "denoising step, so the refs never ride along in "
-                            "the per-step sequence. The LoRA must be trained "
-                            "with ai-toolkit's kv_cache model kwarg for this "
-                            "to work properly. Leave off for normal edit "
-                            "LoRAs."
-                        ),
-                    },
-                ),
-                "scale_ref_positions": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "tooltip": (
-                            "EXPERIMENTAL: remap each reference's RoPE y/x "
-                            "coordinates across the full target latent grid. "
-                            "Useful when the reference is capped near 1MP but "
-                            "the target latent is much larger; intended to "
-                            "prevent top-left anchoring / reduced-scale copies."
-                        ),
-                    },
-                ),
-            }
-        }
-
-    RETURN_TYPES = ("MODEL",)
-    FUNCTION = "patch"
-    CATEGORY = "ostris/krea2"
-    DESCRIPTION = (
-        "Legacy compatibility node. Use Krea2OstrisEditReferenceMode for new "
-        "graphs."
-    )
-
-    def patch(self, model, kv_cache=False, scale_ref_positions=False):
-        return _build_reference_mode_model(
-            model, kv_cache=kv_cache, scale_ref_positions=scale_ref_positions
-        )
-
-
 NODE_CLASS_MAPPINGS = {
     "TextEncodeKrea2OstrisEdit": TextEncodeKrea2OstrisEdit,
     "Krea2OstrisEditReferenceMode": Krea2OstrisEditReferenceMode,
-    "Krea2OstrisEditModelPatch": Krea2OstrisEditModelPatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TextEncodeKrea2OstrisEdit": "Text Encode Krea 2 Ostris Edit",
     "Krea2OstrisEditReferenceMode": "Krea 2 Ostris Edit Reference Mode",
-    "Krea2OstrisEditModelPatch": "Krea 2 Ostris Edit Model Patch (Legacy)",
 }
