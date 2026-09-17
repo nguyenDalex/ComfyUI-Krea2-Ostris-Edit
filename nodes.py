@@ -121,7 +121,7 @@ class TextEncodeKrea2OstrisEdit:
 
 
 # ---------------------------------------------------------------------------
-# Model patch (reference latents -> t=0 tokens in the sequence)
+# Reference mode (reference latents -> t=0 tokens in the sequence)
 # ---------------------------------------------------------------------------
 
 
@@ -632,7 +632,8 @@ class Krea2OstrisEditReferenceMode:
     FUNCTION = "apply"
     CATEGORY = "ostris/krea2"
     DESCRIPTION = (
-        "Opt-in reference-latent conditioning for Krea 2 models. Chain "
+        "Enable reference-latent conditioning on a Krea 2 model "
+        "(index_timestep_zero method, as trained by ai-toolkit). Chain "
         "conditioning from TextEncodeKrea2OstrisEdit or Set Reference Latent "
         "nodes. kv_cache enables the cached one-pass reference mode; the LoRA "
         "must be trained with ai-toolkit's kv_cache option for it to work properly."
