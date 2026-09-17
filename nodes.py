@@ -121,7 +121,7 @@ class TextEncodeKrea2OstrisEdit:
 
 
 # ---------------------------------------------------------------------------
-# Model patch (reference latents -> t=0 tokens in the sequence)
+# Reference mode (reference latents -> t=0 tokens in the sequence)
 # ---------------------------------------------------------------------------
 
 
