@@ -84,7 +84,7 @@ class TextEncodeKrea2OstrisEdit:
         "Encode a prompt with optional reference images for a Krea 2 edit "
         "LoRA. Images are fed to the Qwen3-VL text encoder (needs a text "
         "encoder checkpoint that includes the vision weights) and, when a VAE "
-        "is connected, attached as reference latents for the Model Patch node."
+        "is connected, attached as reference latents for Krea2OstrisEditModelPatch."
     )
 
     def encode(self, clip, prompt, vae=None, image1=None, image2=None, image3=None):
