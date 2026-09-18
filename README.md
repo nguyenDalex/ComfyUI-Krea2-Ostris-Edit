@@ -26,7 +26,7 @@ Encodes the prompt together with the reference images through the Krea 2
 Qwen3-VL text encoder, using Krea's conditioning template with
 `Picture N:` vision placeholders — the same layout used during training.
 When a VAE is connected, each reference image is also VAE-encoded and attached
-to the conditioning as reference latents for the Model Patch node.
+to the conditioning as reference latents for the model patch node.
 
 Image sizing matches training: images fed to the Qwen3-VL encoder are
 downscaled (never upscaled) to fit 384x384 total pixels; reference latents to
