@@ -653,10 +653,12 @@ Krea2OstrisEditReferenceMode = Krea2OstrisEditModelPatch
 
 NODE_CLASS_MAPPINGS = {
     "TextEncodeKrea2OstrisEdit": TextEncodeKrea2OstrisEdit,
+    "Krea2OstrisEditModelPatch": Krea2OstrisEditModelPatch,
     "Krea2OstrisEditReferenceMode": Krea2OstrisEditModelPatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TextEncodeKrea2OstrisEdit": "Text Encode Krea 2 Ostris Edit",
+    "Krea2OstrisEditModelPatch": "Krea 2 Ostris Edit Model Patch",
     "Krea2OstrisEditReferenceMode": "Krea 2 Ostris Edit Model Patch",
 }
